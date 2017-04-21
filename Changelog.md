@@ -4,6 +4,7 @@ Language Features:
 
 
 Compiler Features:
+ * Standard-Json: Support "Yul" as input language.
  * Yul Optimizer: Enable stack allocation optimization by default if yul optimizer is active (disable in yulDetails).
 
 
