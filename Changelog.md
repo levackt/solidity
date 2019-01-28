@@ -8,6 +8,7 @@ Language Features:
 Compiler Features:
  * Type Checker: Give better error messages for some literal conversions
  * Peephole Optimizer: Remove double ``iszero`` before ``jumpi``.
+ * Optimizer: Take shortest representation for store-as-data option in the constant optimizer.
  * SMTChecker: Support enums without typecast.
  * SMTChecker: Support one-dimensional arrays.
  * Yul Optimizer: Add rule to remove empty default switch cases
