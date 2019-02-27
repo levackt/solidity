@@ -2107,17 +2107,11 @@ u256 StructType::storageSize() const
 
 BoolResult StructType::canLiveOutsideStorage() const
 {
-	bool canLive = true;
-	string message;
+	BoolResult result{true};
 	for (auto const& member: m_struct.members())
-	if (!recursive())
-	{
-		canLive &= member->type()->canLiveOutsideStorage();
-		message += member->type()->canLiveOutsideStorage().message();
-	}
-	if (canLive)
-		return true;
-	return BoolResult{message};
+		if (!recursive())
+			result.merge(member->type()->canLiveOutsideStorage(), logical_and<BoolResult>());
+	return result;
 }
 
 string StructType::toString(bool _short) const

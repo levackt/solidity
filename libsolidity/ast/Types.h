@@ -1216,8 +1216,7 @@ public:
 	std::string canonicalName() const override;
 	BoolResult canLiveOutsideStorage() const override
 	{
-//		return BoolResult{"Mappings can not live outside storage."};
-		return false;
+		return BoolResult{"Mappings can not live outside storage."};
 	}
 	TypeResult binaryOperatorResult(Token, TypePointer const&) const override { return TypePointer(); }
 	TypePointer encodingType() const override
