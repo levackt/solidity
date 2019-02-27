@@ -40,8 +40,11 @@ template <class ResultType>
 class Result
 {
 public:
+	struct ErrorTagType {};
+	static constexpr ErrorTagType Error{};
+
 	Result(ResultType _value): Result(_value, std::string{}) { }
-	Result(std::string _message): Result(ResultType{}, std::move(_message)) { }
+	Result(ErrorTagType, std::string _message): Result(ResultType{}, std::move(_message)) { }
 
 	/// @{
 	/// @name Wrapper functions
