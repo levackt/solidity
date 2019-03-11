@@ -92,14 +92,20 @@ void SMTChecker::endVisit(VariableDeclaration const& _varDecl)
 		assignment(_varDecl, *_varDecl.value(), _varDecl.location());
 }
 
+bool SMTChecker::visit(ModifierDefinition const&)
+{
+	return false;
+}
+
 bool SMTChecker::visit(FunctionDefinition const& _function)
 {
-	if (!_function.modifiers().empty() || _function.isConstructor())
+	if (_function.isConstructor())
 		m_errorReporter.warning(
 			_function.location(),
 			"Assertion checker does not yet support constructors and functions with modifiers."
 		);
 	m_functionPath.push_back(&_function);
+	m_modifierDepthStack.push_back(-1);
 	// Not visited by a function call
 	if (isRootFunction())
 	{
@@ -114,7 +120,55 @@ bool SMTChecker::visit(FunctionDefinition const& _function)
 		m_loopExecutionHappened = false;
 		m_arrayAssignmentHappened = false;
 	}
+	_function.parameterList().accept(*this);
+	if (_function.returnParameterList())
+		_function.returnParameterList()->accept(*this);
+	visitFunctionOrModifier();
+	return false;
+}
 
+void SMTChecker::visitFunctionOrModifier()
+{
+	solAssert(!m_functionPath.empty(), "");
+	solAssert(!m_modifierDepthStack.empty(), "");
+
+	++m_modifierDepthStack.back();
+	FunctionDefinition const& function = *m_functionPath.back();
+	Block const* codeBlock = nullptr;
+
+	if (m_modifierDepthStack.back() == int(function.modifiers().size()))
+	{
+		if (function.isImplemented())
+			codeBlock = &function.body();
+	}
+	else
+	{
+		solAssert(m_modifierDepthStack.back() < int(function.modifiers().size()), "");
+		ASTPointer<ModifierInvocation> const& modifierInvocation = function.modifiers()[m_modifierDepthStack.back()];
+		solAssert(modifierInvocation, "");
+		modifierInvocation->accept(*this);
+		auto const& modifierDef = dynamic_cast<ModifierDefinition const&>(
+			*modifierInvocation->name()->annotation().referencedDeclaration
+		);
+		std::vector<ASTPointer<Expression>> const& modifierArguments =
+			modifierInvocation->arguments() ? *modifierInvocation->arguments() : std::vector<ASTPointer<Expression>>();
+		vector<smt::Expression> modifierArgsExpr;
+		for (auto arg: modifierArguments)
+			modifierArgsExpr.push_back(expr(*arg));
+		initializeFunctionCallParameters(modifierDef, modifierArgsExpr);
+		codeBlock = &modifierDef.body();
+	}
+
+	if (codeBlock)
+		codeBlock->accept(*this);
+
+	--m_modifierDepthStack.back();
+}
+
+bool SMTChecker::visit(PlaceholderStatement const&)
+{
+	solAssert(!m_functionPath.empty(), "");
+	visitFunctionOrModifier();
 	return true;
 }
 
@@ -131,6 +185,8 @@ void SMTChecker::endVisit(FunctionDefinition const&)
 		removeLocalVariables();
 	}
 	m_functionPath.pop_back();
+	solAssert(m_modifierDepthStack.back() == -1, "");
+	m_modifierDepthStack.pop_back();
 }
 
 bool SMTChecker::visit(IfStatement const& _node)
@@ -1303,7 +1359,7 @@ smt::CheckResult SMTChecker::checkSatisfiable()
 	return checkSatisfiableAndGenerateModel({}).first;
 }
 
-void SMTChecker::initializeFunctionCallParameters(FunctionDefinition const& _function, vector<smt::Expression> const& _callArgs)
+void SMTChecker::initializeFunctionCallParameters(CallableDeclaration const& _function, vector<smt::Expression> const& _callArgs)
 {
 	auto const& funParams = _function.parameters();
 	solAssert(funParams.size() == _callArgs.size(), "");
