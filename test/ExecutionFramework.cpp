@@ -57,7 +57,7 @@ ExecutionFramework::ExecutionFramework():
 ExecutionFramework::ExecutionFramework(string const& _ipcPath):
 	m_rpc(RPCSession::instance(_ipcPath)),
 	m_evmVersion(dev::test::Options::get().evmVersion()),
-	m_optimize(dev::test::Options::get().optimize),
+	m_optimiserSettings(dev::test::Options::get().optimize ? solidity::OptimiserSettings::minimal() : solidity::OptimiserSettings::enabled()),
 	m_showMessages(dev::test::Options::get().showMessages),
 	m_sender(m_rpc.account(0))
 {
