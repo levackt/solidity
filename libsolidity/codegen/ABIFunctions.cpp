@@ -557,11 +557,13 @@ string ABIFunctions::abiEncodingFunction(
 		switch (fromArray.location())
 		{
 			case DataLocation::CallData:
-				if (fromArray.isByteArray())
-					return abiEncodingFunctionCalldataByteArray(fromArray, *toArray, _options);
+				if (
+					fromArray.isByteArray() ||
+					*fromArray.baseType() == IntegerType::uint256() ||
+					*fromArray.baseType() == FixedBytesType(32)
+				)
+					return abiEncodingFunctionCalldataArrayWithoutCleanup(fromArray, *toArray, _options);
 				else
-					// TODO: for some base types like uint256 that do not require cleanup
-					// we can just use calldatacopy as in the byte array case.
 					return abiEncodingFunctionSimpleArray(fromArray, *toArray, _options);
 			case DataLocation::Memory:
 				if (fromArray.isByteArray())
@@ -674,7 +676,7 @@ string ABIFunctions::abiEncodeAndReturnUpdatedPosFunction(
 	});
 }
 
-string ABIFunctions::abiEncodingFunctionCalldataByteArray(
+string ABIFunctions::abiEncodingFunctionCalldataArrayWithoutCleanup(
 	Type const& _from,
 	Type const& _to,
 	EncodingOptions const& _options
@@ -687,7 +689,12 @@ string ABIFunctions::abiEncodingFunctionCalldataByteArray(
 	auto const& toArrayType = dynamic_cast<ArrayType const&>(_to);
 
 	solAssert(fromArrayType.location() == DataLocation::CallData, "");
-	solAssert(fromArrayType.isByteArray(), "");
+	solAssert(
+		fromArrayType.isByteArray() ||
+		*fromArrayType.baseType() == IntegerType::uint256() ||
+		*fromArrayType.baseType() == FixedBytesType(32),
+	"");
+	solAssert(fromArrayType.calldataStride() == toArrayType.memoryStride(), "");
 
 	solAssert(
 		*fromArrayType.copyForLocation(DataLocation::Memory, true) ==
@@ -706,16 +713,18 @@ string ABIFunctions::abiEncodingFunctionCalldataByteArray(
 			// <readableTypeNameFrom> -> <readableTypeNameTo>
 			function <functionName>(start, length, pos) -> end {
 				pos := <storeLength>(pos, length)
-				<copyFun>(start, pos, length)
-				end := add(pos, <lengthPadded>)
+				let byteLength := mul(length, <stride>)
+				<copyFun>(start, pos, byteLength)
+				end := add(pos, <byteLengthPadded>)
 			}
 		)");
 		templ("storeLength", arrayStoreLengthForEncodingFunction(toArrayType, _options));
 		templ("functionName", functionName);
+		templ("stride", toCompactHexWithPrefix(fromArrayType.calldataStride()));
 		templ("readableTypeNameFrom", _from.toString(true));
 		templ("readableTypeNameTo", _to.toString(true));
 		templ("copyFun", m_utils.copyToMemoryFunction(true));
-		templ("lengthPadded", _options.padded ? m_utils.roundUpFunction() + "(length)" : "length");
+		templ("byteLengthPadded", _options.padded ? m_utils.roundUpFunction() + "(byteLength)" : "byteLength");
 		return templ.render();
 	});
 }
