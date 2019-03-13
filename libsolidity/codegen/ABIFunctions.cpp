@@ -682,7 +682,6 @@ string ABIFunctions::abiEncodingFunctionCalldataArrayWithoutCleanup(
 	EncodingOptions const& _options
 )
 {
-	solAssert(_to.isDynamicallySized(), "");
 	solAssert(_from.category() == Type::Category::Array, "Unknown dynamic type.");
 	solAssert(_to.category() == Type::Category::Array, "Unknown dynamic type.");
 	auto const& fromArrayType = dynamic_cast<ArrayType const&>(_from);
@@ -702,6 +701,8 @@ string ABIFunctions::abiEncodingFunctionCalldataArrayWithoutCleanup(
 		""
 	);
 
+	bool needsPadding = _options.padded && fromArrayType.isByteArray();
+
 	string functionName =
 		"abi_encode_" +
 		_from.identifier() +
@@ -709,23 +710,42 @@ string ABIFunctions::abiEncodingFunctionCalldataArrayWithoutCleanup(
 		_to.identifier() +
 		_options.toFunctionNameSuffix();
 	return createFunction(functionName, [&]() {
-		Whiskers templ(R"(
-			// <readableTypeNameFrom> -> <readableTypeNameTo>
-			function <functionName>(start, length, pos) -> end {
-				pos := <storeLength>(pos, length)
-				let byteLength := mul(length, <stride>)
-				<copyFun>(start, pos, byteLength)
-				end := add(pos, <byteLengthPadded>)
-			}
-		)");
-		templ("storeLength", arrayStoreLengthForEncodingFunction(toArrayType, _options));
-		templ("functionName", functionName);
-		templ("stride", toCompactHexWithPrefix(fromArrayType.calldataStride()));
-		templ("readableTypeNameFrom", _from.toString(true));
-		templ("readableTypeNameTo", _to.toString(true));
-		templ("copyFun", m_utils.copyToMemoryFunction(true));
-		templ("byteLengthPadded", _options.padded ? m_utils.roundUpFunction() + "(byteLength)" : "byteLength");
-		return templ.render();
+		if (fromArrayType.isDynamicallySized())
+		{
+			Whiskers templ(R"(
+				// <readableTypeNameFrom> -> <readableTypeNameTo>
+				function <functionName>(start, length, pos) -> end {
+					pos := <storeLength>(pos, length)
+					let byteLength := mul(length, <stride>)
+					<copyFun>(start, pos, byteLength)
+					end := add(pos, <byteLengthPadded>)
+				}
+			)");
+			templ("storeLength", arrayStoreLengthForEncodingFunction(toArrayType, _options));
+			templ("functionName", functionName);
+			templ("stride", toCompactHexWithPrefix(fromArrayType.calldataStride()));
+			templ("readableTypeNameFrom", _from.toString(true));
+			templ("readableTypeNameTo", _to.toString(true));
+			templ("copyFun", m_utils.copyToMemoryFunction(true));
+			templ("byteLengthPadded", needsPadding ? m_utils.roundUpFunction() + "(byteLength)" : "byteLength");
+			return templ.render();
+		}
+		else
+		{
+			solAssert(fromArrayType.calldataStride() == 32, "");
+			Whiskers templ(R"(
+				// <readableTypeNameFrom> -> <readableTypeNameTo>
+				function <functionName>(start, pos) {
+					<copyFun>(start, pos, <byteLength>)
+				}
+			)");
+			templ("functionName", functionName);
+			templ("readableTypeNameFrom", _from.toString(true));
+			templ("readableTypeNameTo", _to.toString(true));
+			templ("copyFun", m_utils.copyToMemoryFunction(true));
+			templ("byteLength", toCompactHexWithPrefix(fromArrayType.length() * fromArrayType.calldataStride()));
+			return templ.render();
+		}
 	});
 }
 
