@@ -158,8 +158,8 @@ private:
 		Type const& _targetType,
 		EncodingOptions const& _options
 	);
-	/// Part of @a abiEncodingFunction for array target type and given calldata array.
-	std::string abiEncodingFunctionCalldataArray(
+	/// Part of @a abiEncodingFunction for byte array target type and given calldata array.
+	std::string abiEncodingFunctionCalldataByteArray(
 		Type const& _givenType,
 		Type const& _targetType,
 		EncodingOptions const& _options

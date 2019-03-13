@@ -553,19 +553,29 @@ string ABIFunctions::abiEncodingFunction(
 		solAssert(_from.category() == Type::Category::Array, "");
 		solAssert(to.dataStoredIn(DataLocation::Memory), "");
 		ArrayType const& fromArray = dynamic_cast<ArrayType const&>(_from);
-		if (fromArray.location() == DataLocation::CallData)
-			return abiEncodingFunctionCalldataArray(fromArray, *toArray, _options);
-		else if (!fromArray.isByteArray() && (
-				fromArray.location() == DataLocation::Memory ||
-				fromArray.baseType()->storageBytes() > 16
-		))
-			return abiEncodingFunctionSimpleArray(fromArray, *toArray, _options);
-		else if (fromArray.location() == DataLocation::Memory)
-			return abiEncodingFunctionMemoryByteArray(fromArray, *toArray, _options);
-		else if (fromArray.location() == DataLocation::Storage)
-			return abiEncodingFunctionCompactStorageArray(fromArray, *toArray, _options);
-		else
-			solAssert(false, "");
+
+		switch (fromArray.location())
+		{
+			case DataLocation::CallData:
+				if (fromArray.isByteArray())
+					return abiEncodingFunctionCalldataByteArray(fromArray, *toArray, _options);
+				else
+					// TODO: for some base types like uint256 that do not require cleanup
+					// we can just use calldatacopy as in the byte array case.
+					return abiEncodingFunctionSimpleArray(fromArray, *toArray, _options);
+			case DataLocation::Memory:
+				if (fromArray.isByteArray())
+					return abiEncodingFunctionMemoryByteArray(fromArray, *toArray, _options);
+				else
+					return abiEncodingFunctionSimpleArray(fromArray, *toArray, _options);
+			case DataLocation::Storage:
+				if (fromArray.baseType()->storageBytes() <= 16)
+					return abiEncodingFunctionCompactStorageArray(fromArray, *toArray, _options);
+				else
+					return abiEncodingFunctionSimpleArray(fromArray, *toArray, _options);
+			default:
+				solAssert(false, "");
+		}
 	}
 	else if (auto const* toStruct = dynamic_cast<StructType const*>(&to))
 	{
@@ -664,7 +674,7 @@ string ABIFunctions::abiEncodeAndReturnUpdatedPosFunction(
 	});
 }
 
-string ABIFunctions::abiEncodingFunctionCalldataArray(
+string ABIFunctions::abiEncodingFunctionCalldataByteArray(
 	Type const& _from,
 	Type const& _to,
 	EncodingOptions const& _options
@@ -677,6 +687,7 @@ string ABIFunctions::abiEncodingFunctionCalldataArray(
 	auto const& toArrayType = dynamic_cast<ArrayType const&>(_to);
 
 	solAssert(fromArrayType.location() == DataLocation::CallData, "");
+	solAssert(fromArrayType.isByteArray(), "");
 
 	solAssert(
 		*fromArrayType.copyForLocation(DataLocation::Memory, true) ==
@@ -691,9 +702,6 @@ string ABIFunctions::abiEncodingFunctionCalldataArray(
 		_to.identifier() +
 		_options.toFunctionNameSuffix();
 	return createFunction(functionName, [&]() {
-		solUnimplementedAssert(fromArrayType.isByteArray(), "Only byte arrays can be encoded from calldata currently.");
-		// TODO if this is not a byte array, we might just copy byte-by-byte anyway,
-		// because the encoding is position-independent, but we have to check that.
 		Whiskers templ(R"(
 			// <readableTypeNameFrom> -> <readableTypeNameTo>
 			function <functionName>(start, length, pos) -> end {
@@ -727,21 +735,20 @@ string ABIFunctions::abiEncodingFunctionSimpleArray(
 
 	solAssert(_from.isDynamicallySized() == _to.isDynamicallySized(), "");
 	solAssert(_from.length() == _to.length(), "");
-	solAssert(_from.dataStoredIn(DataLocation::Memory) || _from.dataStoredIn(DataLocation::Storage), "");
 	solAssert(!_from.isByteArray(), "");
-	solAssert(_from.dataStoredIn(DataLocation::Memory) || _from.baseType()->storageBytes() > 16, "");
+	if (_from.dataStoredIn(DataLocation::Storage))
+		solAssert(_from.baseType()->storageBytes() > 16, "");
 
 	return createFunction(functionName, [&]() {
 		bool dynamic = _to.isDynamicallyEncoded();
 		bool dynamicBase = _to.baseType()->isDynamicallyEncoded();
-		bool inMemory = _from.dataStoredIn(DataLocation::Memory);
 		bool const usesTail = dynamicBase && !_options.dynamicInplace;
 		Whiskers templ(
 			usesTail ?
 			R"(
 				// <readableTypeNameFrom> -> <readableTypeNameTo>
-				function <functionName>(value, pos) <return> {
-					let length := <lengthFun>(value)
+				function <functionName>(value,<maybeLength> pos) <return> {
+					<declareLength>
 					pos := <storeLength>(pos, length)
 					let headStart := pos
 					let tail := add(pos, mul(length, 0x20))
@@ -759,8 +766,8 @@ string ABIFunctions::abiEncodingFunctionSimpleArray(
 			)" :
 			R"(
 				// <readableTypeNameFrom> -> <readableTypeNameTo>
-				function <functionName>(value, pos) <return> {
-					let length := <lengthFun>(value)
+				function <functionName>(value,<maybeLength> pos) <return> {
+					<declareLength>
 					pos := <storeLength>(pos, length)
 					let srcPtr := <dataAreaFun>(value)
 					for { let i := 0 } lt(i, length) { i := add(i, 1) }
@@ -773,11 +780,21 @@ string ABIFunctions::abiEncodingFunctionSimpleArray(
 			)"
 		);
 		templ("functionName", functionName);
+		bool lengthAsArgument = _from.dataStoredIn(DataLocation::CallData) && _from.isDynamicallySized();
+		if (lengthAsArgument)
+		{
+			templ("maybeLength", " length,");
+			templ("declareLength", "");
+		}
+		else
+		{
+			templ("maybeLength", "");
+			templ("declareLength", "let length := " + m_utils.arrayLengthFunction(_from) + "(value)");
+		}
 		templ("readableTypeNameFrom", _from.toString(true));
 		templ("readableTypeNameTo", _to.toString(true));
 		templ("return", dynamic ? " -> end " : "");
 		templ("assignEnd", dynamic ? "end := pos" : "");
-		templ("lengthFun", m_utils.arrayLengthFunction(_from));
 		templ("storeLength", arrayStoreLengthForEncodingFunction(_to, _options));
 		templ("dataAreaFun", m_utils.arrayDataAreaFunction(_from));
 
@@ -785,7 +802,20 @@ string ABIFunctions::abiEncodingFunctionSimpleArray(
 		subOptions.encodeFunctionFromStack = false;
 		subOptions.padded = true;
 		templ("encodeToMemoryFun", abiEncodeAndReturnUpdatedPosFunction(*_from.baseType(), *_to.baseType(), subOptions));
-		templ("arrayElementAccess", inMemory ? "mload(srcPtr)" : _from.baseType()->isValueType() ? "sload(srcPtr)" : "srcPtr" );
+		switch(_from.location())
+		{
+			case DataLocation::Memory:
+				templ("arrayElementAccess", "mload(srcPtr)");
+				break;
+			case DataLocation::Storage:
+				templ("arrayElementAccess", _from.baseType()->isValueType() ? "sload(srcPtr)" : "srcPtr");
+				break;
+			case DataLocation::CallData:
+				templ("arrayElementAccess", "calldataload(srcPtr)");
+				break;
+			default:
+				solAssert(false, "");
+		}
 		templ("nextArrayElement", m_utils.nextArrayElementFunction(_from));
 		return templ.render();
 	});
