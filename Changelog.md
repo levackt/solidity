@@ -8,6 +8,7 @@ Compiler Features:
 
 
 Bugfixes:
+ * Yul Optimizer: Properly determine whether a variable can be eliminated during stack compression pass.
 
 
 Build System:
